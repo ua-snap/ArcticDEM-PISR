@@ -34,6 +34,9 @@ class Paths:
         self.target_grid = self.ancillary / "target_grid.json"
         self.tile_list = self.ancillary / f"tile_list_{res}m.csv"
         self.manifest = self.raw / "manifest.csv"
+        self.dem_3338 = self.dem / f"arcticdem_v{ver}_{res}m_dem_3338.tif"            # warped, voids as NaN
+        self.dem_3338_filled = self.dem / f"arcticdem_v{ver}_{res}m_dem_3338_filled.tif"  # small voids filled
+        self.dem_fill_mask = self.dem / f"arcticdem_v{ver}_{res}m_dem_3338_fillmask.tif"   # 1 = interpolated
 
     def mkdirs(self):
         for d in (self.ancillary, self.raw, self.dem, self.pisr, self.output, self.qc,

@@ -67,7 +67,7 @@ def main():
     paths = Paths(cfg)
     res, ver = cfg["arcticdem"]["resolution_m"], cfg["arcticdem"]["version"]
     params = SolarParams(**cfg.get("pisr", {}))
-    dem_path = args.dem or paths.dem / f"arcticdem_v{ver}_{res}m_dem_3338.tif"
+    dem_path = args.dem or paths.dem_3338_filled
     pisr_path = args.pisr or paths.pisr / f"pisr_equinox_{res}m_3338.tif"
     if args.qc_dir:
         paths.qc = __import__("pathlib").Path(args.qc_dir)

@@ -2,6 +2,7 @@
 
 - dims (y, x); 1-D cell-centre coordinates in metres; y descending (north-up, same as the GeoTIFF)
 - `pisr` float32, NaN fill, grid_mapping "crs"; `crs` variable with CF Albers parameters + WKT (EPSG:3338)
+- `elevation` float32: the void-filled 32 m EPSG:3338 DEM that PISR was computed from
 - zlib + shuffle, chunked; provenance in global attributes
 Then verifies: GDAL reads CRS/geotransform identically to the GeoTIFF, and values round-trip at random points.
 """
@@ -65,7 +66,20 @@ def main():
     }
     x = da["x"].values
     y = da["y"].values
-    ds_out = xr.Dataset({"pisr": da})
+    dem = xr.open_dataarray(paths.dem_3338_filled, engine="rasterio", chunks={"x": 4 * args.chunk, "y": 4 * args.chunk})
+    dem = dem.squeeze("band", drop=True).astype("float32").drop_vars("spatial_ref", errors="ignore")
+    assert np.array_equal(dem.x, da.x) and np.array_equal(dem.y, da.y), "DEM and PISR grids differ"
+    dem.name = "elevation"
+    dem.attrs = {
+        "long_name": "Surface elevation used for PISR (ArcticDEM v4.1 mosaic, warped to this grid)",
+        "standard_name": "height_above_reference_ellipsoid",
+        "units": "m",
+        "grid_mapping": "crs",
+        "comment": ("Heights above the WGS84 ellipsoid (ArcticDEM convention). Cubic resampling from 32 m "
+                    "EPSG:3413. Enclosed voids of <= %s cells were filled by inverse-distance interpolation."
+                    % cfg["void_fill"]["max_cells"]),
+    }
+    ds_out = xr.Dataset({"pisr": da, "elevation": dem})
     ds_out["x"].attrs = {"standard_name": "projection_x_coordinate", "long_name": "x coordinate of cell centre",
                          "units": "m", "axis": "X"}
     ds_out["y"].attrs = {"standard_name": "projection_y_coordinate", "long_name": "y coordinate of cell centre",
@@ -82,7 +96,8 @@ def main():
         "Conventions": "CF-1.8",
         "title": f"Potential incoming solar radiation (equinox, clear sky) for Alaska from ArcticDEM v{ver} {res} m",
         "summary": ("Daily clear-sky total insolation on the terrain surface for an idealized equinox day, computed "
-                    "from the ArcticDEM mosaic (warped from EPSG:3413 to EPSG:3338 with cubic resampling). "
+                    "from the ArcticDEM mosaic (warped from EPSG:3413 to EPSG:3338 with cubic resampling; small "
+                    "enclosed voids filled by inverse-distance interpolation). "
                     "Intended as a combined slope/aspect/latitude covariate. Extent: Alaska's bounding box in "
                     "EPSG:3338, including adjacent Canada and Russia where ArcticDEM has data."),
         "source": (f"ArcticDEM mosaic v{ver}, {res} m (Polar Geospatial Center, University of Minnesota), "
@@ -102,8 +117,9 @@ def main():
         "history": f"{datetime.now(timezone.utc).isoformat(timespec='seconds')}: created from {src.name}",
         "date_created": datetime.now(timezone.utc).date().isoformat(),
     }
-    enc = {"pisr": {"zlib": True, "complevel": args.complevel, "shuffle": True, "_FillValue": np.float32(np.nan),
-                    "chunksizes": (args.chunk, args.chunk), "dtype": "float32"},
+    var_enc = {"zlib": True, "complevel": args.complevel, "shuffle": True, "_FillValue": np.float32(np.nan),
+               "chunksizes": (args.chunk, args.chunk), "dtype": "float32"}
+    enc = {"pisr": var_enc, "elevation": dict(var_enc),
            "x": {"_FillValue": None}, "y": {"_FillValue": None}}
     tmp = out.with_suffix(".tmp.nc")
     ds_out.to_netcdf(tmp, engine="netcdf4", format="NETCDF4", encoding=enc)

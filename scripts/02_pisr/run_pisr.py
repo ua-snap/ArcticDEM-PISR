@@ -27,7 +27,7 @@ BLOCK = 512
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default=None)
-    ap.add_argument("--dem", default=None, help="input DEM (default: the 32 m EPSG:3338 DEM)")
+    ap.add_argument("--dem", default=None, help="input DEM (default: the void-filled 32 m EPSG:3338 DEM)")
     ap.add_argument("--out", default=None, help="output GeoTIFF (default: pisr/pisr_equinox_<res>m_3338.tif)")
     ap.add_argument("--bounds", nargs=4, type=float, metavar=("XMIN", "YMIN", "XMAX", "YMAX"),
                     help="process only this sub-window (in the DEM's CRS), snapped to the grid")
@@ -36,7 +36,7 @@ def main():
     cfg = load_config(args.config) if args.config else load_config()
     paths = Paths(cfg)
     res, ver = cfg["arcticdem"]["resolution_m"], cfg["arcticdem"]["version"]
-    dem_path = Path(args.dem or paths.dem / f"arcticdem_v{ver}_{res}m_dem_3338.tif")
+    dem_path = Path(args.dem or paths.dem_3338_filled)
     out_path = Path(args.out or paths.pisr / f"pisr_equinox_{res}m_3338.tif")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     params = SolarParams(**cfg.get("pisr", {}))

@@ -26,3 +26,7 @@ pisr:                       # SolarParams (src/arcticdem_pisr/solar.py)
   transmittance: 0.70       # lumped clear-sky transmittance
   step_minutes: 5.0
   include_diffuse: true
+
+void_fill:                  # small enclosed DEM voids are interpolated before PISR
+  max_cells: 1000           # voids up to this many cells (~1 km² at 32 m) are filled; larger stay NoData
+  idw_power: 2.0

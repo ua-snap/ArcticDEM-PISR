@@ -188,7 +188,7 @@ def main():
     res, ver = cfg["arcticdem"]["resolution_m"], cfg["arcticdem"]["version"]
     params = SolarParams(**cfg.get("pisr", {}))
     pisr_path = paths.pisr / f"pisr_equinox_{res}m_3338.tif"
-    dem_path = paths.dem / f"arcticdem_v{ver}_{res}m_dem_3338.tif"
+    dem_path = paths.dem_3338_filled
     ak = gpd.read_file(paths.alaska_boundary).to_crs(3338)
     s = dict(np.load(paths.qc / "qc_samples.npz"))
     vmin, vmax = np.percentile(s["pisr"], [1, 99])
