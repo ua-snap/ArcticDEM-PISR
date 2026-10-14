@@ -1,0 +1,28 @@
+# ArcticDEM-PISR pipeline configuration
+data_root: /beegfs/CMIP6/jdpaul3/ArcticDEM-PISR_data
+
+arcticdem:
+  version: "4.1"
+  resolution_m: 32
+  stac_collection: https://pgc-opendata-dems.s3.us-west-2.amazonaws.com/arcticdem/mosaics/v4.1/32m.json
+  crs: EPSG:3413
+  # Tile id "RR_CC": 100 km tiles, lower-left = (-4e6 + (CC-1)*1e5, -4e6 + (RR-1)*1e5) in EPSG:3413
+  tile_size_m: 100000
+  tile_origin_m: -4000000
+  assets: [dem, datamask, count, mad, metadata]
+  download_workers: 8
+
+aoi:
+  boundary_url: https://www2.census.gov/geo/tiger/GENZ2025/shp/cb_2025_us_state_500k.zip
+  state_fips: "02"
+  download_buffer_m: 2000   # margin around the 3338 bbox so resampling has data at the edges
+
+target_grid:
+  crs: EPSG:3338
+  resolution_m: 32          # pixel edges snapped to multiples of this
+
+pisr:                       # SolarParams (src/arcticdem_pisr/solar.py)
+  solar_constant: 1361.0    # W m-2
+  transmittance: 0.70       # lumped clear-sky transmittance
+  step_minutes: 5.0
+  include_diffuse: true

@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arcticdem-pisr"
+version = "0.1.0"
+description = "Potential incoming solar radiation (PISR) from the ArcticDEM mosaic for Alaska"
+requires-python = ">=3.11"
+
+[tool.setuptools.packages.find]
+where = ["src"]

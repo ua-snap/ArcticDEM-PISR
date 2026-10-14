@@ -1,0 +1,28 @@
+name: arcticdem-pisr
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.12
+  - gdal
+  - libgdal-netcdf
+  - rasterio
+  - pyproj
+  - geopandas
+  - pyogrio
+  - shapely
+  - numpy
+  - numba
+  - scipy
+  - xarray
+  - rioxarray
+  - dask
+  - netcdf4
+  - h5netcdf
+  - requests
+  - pyyaml
+  - matplotlib
+  - cartopy
+  - pytest
+  - tqdm
+  - pvlib

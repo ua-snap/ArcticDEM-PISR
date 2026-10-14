@@ -218,3 +218,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Claude Code working files (progress tracking, plans, guard hook, scratch)
+CLAUDE.md
+CLAUDE.local.md
+.claude/
