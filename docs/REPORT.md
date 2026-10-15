@@ -82,12 +82,36 @@ Code and full method: [README](../README.md), model in [`solar.py`](../src/arcti
 <img src="figures/fig6_flat_vs_latitude.png" width="60%" alt="Flat terrain vs latitude">
 </p>
 
-## 5. Using it in the composite index
+## 5. Using it in the thaw index
 
-- **Sign:** positive TII = warm slope = *less* likely permafrost. Flip the sign if your index runs the other way.
-- **Scaling to 0–1:** TII is centered on 0 (Alaska median 0.00, 1st–99th percentile −1.58 to +1.36). Clip at
-  ±1.6 (99th percentile of |TII|) and map linearly so that **0.5 = flat ground**, 0 = coldest, 1 = warmest. On a
-  0–100 integer scale, 50 = flat and each step is 0.032 kWh m⁻² day⁻¹.
+The thaw index needs warm slopes to score **higher** than cold slopes and flat ground. Flat ground is where much
+of Alaska's permafrost sits, and permafrost there is controlled by soils, vegetation, and snow, which the other
+layers cover. So the terrain term should add thaw potential **only on sun-facing slopes**, and never on flat ground.
+
+**Recommended transform** (applied in the composite code; the netCDF keeps the physical TII):
+
+```
+thaw_score = clip((TII − 0.1) / (1.4 − 0.1), 0, 1)
+```
+
+| TII | thaw_score | Meaning |
+|---|---|---|
+| ≤ 0.1 (flat, north-facing, near-flat) | 0 | terrain adds no thaw potential |
+| 0.4–0.5 (moderate sunny slopes, e.g. hills around Fairbanks) | ~0.25–0.3 | some |
+| ≥ 1.4 (steepest sun-facing slopes, under 1% of Alaska) | 1 | maximum |
+
+![Thaw score map](figures/fig7_thaw_score_map.png)
+
+Flat lowlands (North Slope, Yukon–Kuskokwim delta, Tanana Flats) and all shaded slopes stay at 0. Around
+Fairbanks only the south-facing hills light up: the classic Interior pattern of permafrost-free south slopes and
+permafrost on north slopes and flats. About 26% of Alaska scores above 0.
+
+- **Tuning:** 0.1 is a small tolerance so nearly flat ground stays at 0. 1.4 sets where the score saturates;
+  lower it (e.g. 1.0) if moderate south-facing slopes should count more.
+- **Combine by adding, not multiplying:** a weighted sum keeps flat ground at "no terrain effect"; in a product,
+  every flat cell would become 0.
+- **NoData vs 0:** NoData is NaN (water, no DEM). A thaw score of 0 is a real value (flat or shaded). If you store it
+  as integers, don't use 0 as the NoData code.
 - **Check for overlap:** if the permafrost probability layer already used aspect or solar radiation as a predictor,
   some of the terrain signal is shared. Consider a lower weight.
 - **Limits:** clear-sky potential only (no clouds or snow), and no shadows from neighboring mountains. Interpolated

@@ -7,6 +7,7 @@ Uses outputs of qc.py (qc_samples.npz, pisr_histogram.csv, tii_histogram.csv).
   fig4_tii_aspect_slope.png  TII vs aspect by slope class, all latitudes
   fig5_distributions.png     PISR and TII distributions over Alaska
   fig6_flat_vs_latitude.png  QC: flat cells follow the model's latitude curve
+  fig7_thaw_score_map.png    example thaw-index transform of TII: flat/shaded = 0, sun-facing -> 1 (not stored in data)
 Palettes: single-hue orange ramp for PISR magnitude; blue-white-red diverging for TII (white = flat ground, as the
 user requested); blue ordinal ramp for slope classes (validated with the dataviz skill's validator).
 """
@@ -51,6 +52,15 @@ REGIONS = [  # (label, lon, lat) - sample areas, north to south
 ]
 HALF = 30000  # sample-area half-width, m (60 km boxes)
 TII_LIM = 1.5
+# Example transform for a thaw index (report section 5): only sun-facing slopes add thaw potential.
+THAW_T0, THAW_T1 = 0.1, 1.4
+THAW = LinearSegmentedColormap.from_list("thaw", ["#ffffff", "#fbd5d4", "#f4a6a5", "#e34948", "#a8292a", "#5c1515"])
+THAW.set_bad(NODATA)
+
+
+def thaw_score(tii):
+    """clip((TII - T0) / (T1 - T0), 0, 1): flat ground and shaded slopes 0, strongly sun-facing slopes 1."""
+    return np.ma.clip((tii - THAW_T0) / (THAW_T1 - THAW_T0), 0, 1)
 
 plt.rcParams.update({
     "figure.facecolor": SURFACE, "axes.facecolor": SURFACE, "savefig.facecolor": SURFACE,
@@ -68,7 +78,8 @@ def clean_map_axes(ax):
         s.set_visible(False)
 
 
-def domain_with_panels(raster, ak, cmap, vmin, vmax, title, subtitle, ticks, ticklabels, out, panel_note=None):
+def domain_with_panels(raster, ak, cmap, vmin, vmax, title, subtitle, ticks, ticklabels, out, panel_note=None,
+                       transform=None, units=UNITS):
     """Full-domain map on top (sample-area boxes labelled) and the three 60 km sample areas below."""
     to = Transformer.from_crs(4326, 3338, always_xy=True)
     fig = plt.figure(figsize=(14, 12.6))
@@ -77,6 +88,8 @@ def domain_with_panels(raster, ak, cmap, vmin, vmax, title, subtitle, ticks, tic
         dec = 24
         a = ds.read(1, out_shape=(ds.height // dec, ds.width // dec), masked=True)
         b = ds.bounds
+    if transform:
+        a = transform(a)
     im = ax0.imshow(a, cmap=cmap, vmin=vmin, vmax=vmax, extent=[b.left, b.right, b.bottom, b.top],
                     interpolation="nearest")
     ak.boundary.plot(ax=ax0, color=INK2, lw=0.35)
@@ -91,13 +104,15 @@ def domain_with_panels(raster, ak, cmap, vmin, vmax, title, subtitle, ticks, tic
     ax0.text(0, 1.01, subtitle, transform=ax0.transAxes, color=INK2, va="bottom", fontsize=9)
     cb = fig.colorbar(im, ax=ax0, orientation="horizontal", fraction=0.035, pad=0.01, aspect=50, shrink=0.55)
     cb.set_ticks(ticks); cb.set_ticklabels(ticklabels)
-    cb.set_label(UNITS, color=INK2, labelpad=4); cb.outline.set_visible(False)
+    cb.set_label(units, color=INK2, labelpad=4); cb.outline.set_visible(False)
     cb.ax.xaxis.set_label_position("top")
     for k, (label, lon, lat) in enumerate(REGIONS):
         ax = fig.add_axes([0.02 + k * 0.33, 0.015, 0.31, 0.355])
         x, y = to.transform(lon, lat)
         with rasterio.open(raster) as ds:
             z = ds.read(1, window=from_bounds(x - HALF, y - HALF, x + HALF, y + HALF, ds.transform), masked=True)
+        if transform:
+            z = transform(z)
         ax.imshow(z, cmap=cmap, vmin=vmin, vmax=vmax, interpolation="lanczos")
         clean_map_axes(ax)
         ax.set_title(f"{label} ({lat:.1f}°N), 60 × 60 km", fontsize=10)
@@ -254,6 +269,14 @@ def main():
         tii_aspect(s, F / "fig4_tii_aspect_slope.png"),
         distributions(paths, F / "fig5_distributions.png"),
         latitude(s, params, F / "fig6_flat_vs_latitude.png"),
+        domain_with_panels(paths.tii_3338, ak, THAW, 0, 1,
+                           "Example thaw-index term from TII: only sun-facing slopes add thaw potential",
+                           f"score = clip((TII − {THAW_T0}) / ({THAW_T1} − {THAW_T0}), 0, 1) · flat ground and shaded "
+                           "slopes = 0 · gray = no data or water",
+                           [0, 0.25, 0.5, 0.75, 1], ["0\nflat or shaded", "0.25", "0.5", "0.75", "1\nsun-facing"],
+                           F / "fig7_thaw_score_map.png", transform=thaw_score, units="thaw score (unitless)",
+                           panel_note=lambda z: f"{100 * (z.compressed() > 0).mean():.0f}% above 0 · "
+                                                f"mean {z.compressed().mean():.2f}"),
     ]
     print(json.dumps([str(o) for o in outs], indent=1))
 
