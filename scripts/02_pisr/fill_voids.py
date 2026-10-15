@@ -88,8 +88,8 @@ def main():
     (paths.qc / "void_fill_stats.json").write_text(json.dumps(stats, indent=2))
     print(json.dumps(stats, indent=2), flush=True)
 
-    profile.update(num_threads="ALL_CPUS")
-    for path, arr, extra in ((paths.dem_3338_filled, dem, {}),
+    profile.update(num_threads="ALL_CPUS", bigtiff="YES")
+    for path, arr, extra in ((paths.dem_3338_filled, dem, dict(predictor=3)),
                              (paths.dem_fill_mask, fillmask, dict(dtype="uint8", nodata=None, predictor=2))):
         tmp = path.with_suffix(".tmp.tif")
         with rasterio.open(tmp, "w", **{**profile, **extra}) as dst:
@@ -98,7 +98,7 @@ def main():
                 dst.update_tags(void_fill=json.dumps({k: stats[k] for k in ("max_cells", "idw_power", "filled_cells")}))
         with rasterio.open(tmp, "r+") as dst:
             dst.build_overviews([4, 16, 64, 256], rasterio.enums.Resampling.average if arr.dtype != np.uint8
-                                else rasterio.enums.Resampling.max)
+                                else rasterio.enums.Resampling.nearest)
         tmp.rename(path)
         print(f"wrote {path}; {time.time() - t0:.0f}s", flush=True)
 

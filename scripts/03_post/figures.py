@@ -89,7 +89,8 @@ def statewide(paths, pisr_path, ak, vmin, vmax):
 
 def zooms(paths, pisr_path, dem_path, vmin, vmax):
     to = Transformer.from_crs(4326, 3338, always_xy=True)
-    fig, axes = plt.subplots(len(REGIONS), 2, figsize=(10, 4.9 * len(REGIONS)), constrained_layout=True)
+    fig, axes = plt.subplots(len(REGIONS), 2, figsize=(10, 4.9 * len(REGIONS)), constrained_layout=True,
+                             squeeze=False)
     with rasterio.open(pisr_path) as P, rasterio.open(dem_path) as D:
         for i, (label, lon, lat) in enumerate(REGIONS):
             x, y = to.transform(lon, lat)
