@@ -37,6 +37,11 @@ class Paths:
         self.dem_3338 = self.dem / f"arcticdem_v{ver}_{res}m_dem_3338.tif"            # warped, voids as NaN
         self.dem_3338_filled = self.dem / f"arcticdem_v{ver}_{res}m_dem_3338_filled.tif"  # small voids filled
         self.dem_fill_mask = self.dem / f"arcticdem_v{ver}_{res}m_dem_3338_fillmask.tif"   # 1 = interpolated
+        self.datamask_3338 = self.dem / f"arcticdem_v{ver}_{res}m_datamask_3338.tif"     # ArcticDEM datamask, nearest
+        self.water_mask = self.dem / f"arcticdem_v{ver}_{res}m_water_3338.tif"           # 1 = water (PISR NoData)
+        self.pisr_3338 = self.pisr / f"pisr_equinox_{res}m_3338.tif"                     # final, water masked
+        self.pisr_3338_unmasked = self.pisr / f"pisr_equinox_{res}m_3338_unmasked.tif"   # before water masking
+        self.tii_3338 = self.pisr / f"terrain_insolation_index_{res}m_3338.tif"         # TII, water masked
 
     def mkdirs(self):
         for d in (self.ancillary, self.raw, self.dem, self.pisr, self.output, self.qc,

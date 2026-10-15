@@ -62,7 +62,9 @@ def main():
         "grid_mapping": "crs",
         "comment": ("Idealized equinox (solar declination 0, mean Earth-Sun distance); local slope/aspect "
                     "self-shading only, no cast shadows from surrounding terrain; constant lumped atmospheric "
-                    "transmittance (no elevation effect); ground-reflected radiation excluded."),
+                    "transmittance (no elevation effect); ground-reflected radiation excluded. Water is NoData: cells "
+                    "ArcticDEM flags as no stereo data (datamask 0) that are flattened surfaces (slope < %s deg)."
+                    % cfg["water_mask"]["max_slope_deg"]),
     }
     x = da["x"].values
     y = da["y"].values
@@ -79,7 +81,23 @@ def main():
                     "EPSG:3413. Enclosed voids of <= %s cells were filled by inverse-distance interpolation."
                     % cfg["void_fill"]["max_cells"]),
     }
-    ds_out = xr.Dataset({"pisr": da, "elevation": dem})
+    tii = xr.open_dataarray(paths.tii_3338, engine="rasterio", chunks={"x": 4 * args.chunk, "y": 4 * args.chunk})
+    tii = tii.squeeze("band", drop=True).astype("float32").drop_vars("spatial_ref", errors="ignore")
+    assert np.array_equal(tii.x, da.x) and np.array_equal(tii.y, da.y), "TII and PISR grids differ"
+    ref_lat = cfg["tii"]["ref_lat_deg"]
+    tii.name = "terrain_insolation_index"
+    tii.attrs = {
+        "long_name": "Terrain insolation index: equinox insolation relative to flat ground, latitude removed",
+        "units": "kWh m-2 day-1",
+        "grid_mapping": "crs",
+        "reference_latitude_deg": float(ref_lat),
+        "comment": (f"Same model as pisr, but every cell is evaluated at latitude {ref_lat}N (keeping its true slope "
+                    f"and aspect) and the flat-ground value at {ref_lat}N is subtracted. 0 = like flat ground, "
+                    "> 0 = warm (sun-facing) slope, < 0 = cold slope. The same slope and aspect give the same "
+                    "value anywhere, so the index carries terrain only (latitude and elevation removed). "
+                    "Water is NoData."),
+    }
+    ds_out = xr.Dataset({"pisr": da, "terrain_insolation_index": tii, "elevation": dem})
     ds_out["x"].attrs = {"standard_name": "projection_x_coordinate", "long_name": "x coordinate of cell centre",
                          "units": "m", "axis": "X"}
     ds_out["y"].attrs = {"standard_name": "projection_y_coordinate", "long_name": "y coordinate of cell centre",
@@ -98,7 +116,8 @@ def main():
         "summary": ("Daily clear-sky total insolation on the terrain surface for an idealized equinox day, computed "
                     "from the ArcticDEM mosaic (warped from EPSG:3413 to EPSG:3338 with cubic resampling; small "
                     "enclosed voids filled by inverse-distance interpolation). "
-                    "Intended as a combined slope/aspect/latitude covariate. Extent: Alaska's bounding box in "
+                    "pisr is a combined slope/aspect/latitude covariate; terrain_insolation_index is the "
+                    "latitude-independent slope/aspect effect (warm vs cold slopes). Extent: Alaska's bounding box in "
                     "EPSG:3338, including adjacent Canada and Russia where ArcticDEM has data."),
         "source": (f"ArcticDEM mosaic v{ver}, {res} m (Polar Geospatial Center, University of Minnesota), "
                    "https://www.pgc.umn.edu/data/arcticdem/"),
@@ -119,7 +138,7 @@ def main():
     }
     var_enc = {"zlib": True, "complevel": args.complevel, "shuffle": True, "_FillValue": np.float32(np.nan),
                "chunksizes": (args.chunk, args.chunk), "dtype": "float32"}
-    enc = {"pisr": var_enc, "elevation": dict(var_enc),
+    enc = {"pisr": var_enc, "terrain_insolation_index": dict(var_enc), "elevation": dict(var_enc),
            "x": {"_FillValue": None}, "y": {"_FillValue": None}}
     tmp = out.with_suffix(".tmp.nc")
     ds_out.to_netcdf(tmp, engine="netcdf4", format="NETCDF4", encoding=enc)
@@ -145,7 +164,7 @@ def main():
     with open(out, "rb") as f:
         for blk in iter(lambda: f.read(1 << 24), b""):
             h.update(blk)
-    (out.parent / "SHA256SUMS").open("a").write(f"{h.hexdigest()}  {out.name}\n")
+    (out.parent / "SHA256SUMS").write_text(f"{h.hexdigest()}  {out.name}\n")
     print(json.dumps({"verified": True, "gdal_geotransform": g_nc.GetGeoTransform(), "sha256": h.hexdigest()},
                      indent=2))
 

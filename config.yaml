@@ -30,3 +30,9 @@ pisr:                       # SolarParams (src/arcticdem_pisr/solar.py)
 void_fill:                  # small enclosed DEM voids are interpolated before PISR
   max_cells: 1000           # voids up to this many cells (~1 km² at 32 m) are filled; larger stay NoData
   idw_power: 2.0
+
+water_mask:                 # PISR set to NoData over water (ArcticDEM flattens lakes and sea)
+  max_slope_deg: 0.05       # water = datamask 0 AND valid in the unfilled DEM AND Horn slope below this
+
+tii:                        # terrain insolation index = PISR at a fixed latitude minus flat ground there
+  ref_lat_deg: 64.0         # central Alaska; same slope/aspect -> same value anywhere

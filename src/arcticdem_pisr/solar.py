@@ -160,3 +160,18 @@ def reference_flat(lat_deg, params=SolarParams()):
     out = _pisr_kernel(np.zeros((n + 2, 3)), 1.0, 1.0, lat, one, zero, zero, one, omegas, dt_h,
                        params.solar_constant, params.transmittance, params.include_diffuse)
     return out[:, 0].astype(np.float64)
+
+
+def terrain_insolation_index(dem_halo, transform, crs, params=SolarParams(), ref_lat_deg=64.0, geo=None):
+    """Terrain insolation index (TII), kWh m-2 day-1: slope/aspect effect with latitude removed.
+
+    TII = PISR computed as if the cell were at `ref_lat_deg` (true slope and true aspect kept, via the projection
+    Jacobian) minus PISR of flat ground at `ref_lat_deg`. Flat ground = 0, warm (sun-facing) slopes > 0, cold slopes
+    < 0. Identical slope/aspect gives the identical value anywhere in the domain.
+    """
+    ny, nx = dem_halo.shape[0] - 2, dem_halo.shape[1] - 2
+    if geo is None:
+        geo = lat_and_jacobian(transform, (ny, nx), crs)
+    geo = (np.full((ny, nx), np.deg2rad(ref_lat_deg)),) + tuple(geo[1:])
+    flat = reference_flat([ref_lat_deg], params)[0]
+    return (pisr(dem_halo, transform, crs, params, geo=geo) - flat).astype(np.float32)

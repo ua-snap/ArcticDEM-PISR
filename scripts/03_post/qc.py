@@ -2,13 +2,16 @@
 
 Checks:
   1. Grid: CRS/size/transform equal target_grid.json and the 3338 DEM.
-  2. Completeness (full resolution): PISR is valid exactly where the DEM's 3x3 window is fully valid.
+  2. Completeness (full resolution): PISR is valid exactly where the DEM's 3x3 window is fully valid and the
+     cell is not water (water mask from mask_water.py).
   3. Range: 0 <= PISR <= upper bound (flat surface at the equator, same atmosphere).
   4. Reproducibility: random windows recomputed from the DEM match the file (to 1e-4; the geometry lattice is
      anchored differently per window, so float32 rounding differs).
   5. Physics on real terrain (sampled windows): flat cells match the flat reference curve vs latitude;
      mean PISR by true aspect is S > E ≈ W > N on steeper slopes.
   6. Seams: no step at processing band boundaries (row differences across boundaries vs nearby rows).
+  7. Terrain insolation index (TII), if present: NoData identical to PISR; flat cells ~0; recomputation matches;
+     essentially uncorrelated with latitude (PISR's correlation with latitude is reported for contrast).
 Also builds overviews on the PISR GeoTIFF if missing (for figures).
 """
 import argparse
@@ -24,10 +27,11 @@ from rasterio.windows import Window
 from scipy import ndimage
 
 from arcticdem_pisr.config import Paths, load_config
-from arcticdem_pisr.solar import SolarParams, lat_and_jacobian, pisr, reference_flat
+from arcticdem_pisr.solar import SolarParams, lat_and_jacobian, pisr, reference_flat, terrain_insolation_index
 
 gdal.UseExceptions()
 HIST_EDGES = np.round(np.arange(0, 8.0001, 0.02), 4)
+TII_EDGES = np.round(np.arange(-4, 4.0001, 0.02), 4)
 
 
 def dem_window(D, P, win):
@@ -35,6 +39,13 @@ def dem_window(D, P, win):
     x, y = P.transform * (win.col_off, win.row_off)
     c, r = ~D.transform * (x, y)
     return Window(int(round(c)), int(round(r)), win.width, win.height)
+
+
+def read_water(Wds, P, win):
+    """Water mask (bool) for PISR window `win`; all False if there is no water mask."""
+    if Wds is None:
+        return np.zeros((int(win.height), int(win.width)), bool)
+    return Wds.read(1, window=dem_window(Wds, P, win), boundless=True, fill_value=0) == 1
 
 
 def horn_true(dem_halo, transform, crs):
@@ -61,6 +72,7 @@ def main():
     ap.add_argument("--win", type=int, default=512)
     ap.add_argument("--pisr", default=None, help="override PISR path (e.g. a pilot)")
     ap.add_argument("--dem", default=None, help="override DEM path")
+    ap.add_argument("--tii", default=None, help="override TII path")
     ap.add_argument("--qc-dir", default=None, help="override output dir")
     args = ap.parse_args()
     cfg = load_config(args.config) if args.config else load_config()
@@ -68,7 +80,8 @@ def main():
     res, ver = cfg["arcticdem"]["resolution_m"], cfg["arcticdem"]["version"]
     params = SolarParams(**cfg.get("pisr", {}))
     dem_path = args.dem or paths.dem_3338_filled
-    pisr_path = args.pisr or paths.pisr / f"pisr_equinox_{res}m_3338.tif"
+    pisr_path = args.pisr or paths.pisr_3338
+    water_path = paths.water_mask if paths.water_mask.exists() else None
     if args.qc_dir:
         paths.qc = __import__("pathlib").Path(args.qc_dir)
     grid = json.loads(paths.target_grid.read_text())
@@ -84,16 +97,27 @@ def main():
     if not g["overviews"]:
         gdal.Open(str(pisr_path), gdal.GA_Update).BuildOverviews("AVERAGE", [4, 16, 64, 256])
         report["grid"]["overviews_built"] = True
+    if not args.pisr and paths.tii_3338.exists():
+        with rasterio.open(paths.tii_3338) as T:
+            has_ov = bool(T.overviews(1))
+        if not has_ov:
+            gdal.Open(str(paths.tii_3338), gdal.GA_Update).BuildOverviews("AVERAGE", [4, 16, 64, 256])
     print("grid:", g, flush=True)
 
     # --- 2/3. completeness, range, histograms (full resolution) -----------------------------------
     ak = gpd.read_file(paths.alaska_boundary).to_crs(3338)
     bound = float(reference_flat([0.0], params)[0])
-    cnt = dict(cells=0, dem_valid=0, dem_interior_valid=0, pisr_valid=0, nan_where_expected_valid=0,
+    cnt = dict(cells=0, dem_valid=0, dem_interior_valid=0, water=0, pisr_valid=0, nan_where_expected_valid=0,
                valid_where_dem_nan=0, above_bound=0, below_zero=0, ak_cells=0, ak_dem_valid=0, ak_pisr_valid=0)
     hist_all = np.zeros(len(HIST_EDGES) - 1, np.int64)
     hist_ak = np.zeros_like(hist_all)
     vmin, vmax = np.inf, -np.inf
+    Wds = rasterio.open(water_path) if water_path else None
+    tii_path = args.tii or (None if args.pisr else (paths.tii_3338 if paths.tii_3338.exists() else None))
+    Tds = rasterio.open(tii_path) if tii_path else None
+    tii_cnt = dict(valid=0, nodata_mismatch_vs_pisr=0, min=np.inf, max=-np.inf)
+    tii_hist_all = np.zeros(len(TII_EDGES) - 1, np.int64)
+    tii_hist_ak = np.zeros_like(tii_hist_all)
     with rasterio.open(pisr_path) as P, rasterio.open(dem_path) as D:
         H, W = P.height, P.width
         for r0 in range(0, H, args.band_rows):
@@ -105,6 +129,9 @@ def main():
             dv = dv[1:-1, 1:-1]
             pv = P.read(1, window=Window(0, r0, W, r1 - r0))
             pvalid = np.isfinite(pv)
+            water = read_water(Wds, P, Window(0, r0, W, r1 - r0))
+            interior &= ~water
+            cnt["water"] += int(water.sum())
             akm = features.rasterize(ak.geometry, out_shape=pv.shape,
                                      transform=P.window_transform(Window(0, r0, W, r1 - r0))) == 1
             cnt["cells"] += pv.size
@@ -123,19 +150,36 @@ def main():
                 cnt["below_zero"] += int((vals < 0).sum())
                 hist_all += np.histogram(vals, HIST_EDGES)[0]
                 hist_ak += np.histogram(pv[pvalid & akm], HIST_EDGES)[0]
+            if Tds is not None:
+                tv = Tds.read(1, window=Window(0, r0, W, r1 - r0))
+                tvalid = np.isfinite(tv)
+                tii_cnt["valid"] += int(tvalid.sum())
+                tii_cnt["nodata_mismatch_vs_pisr"] += int((tvalid != pvalid).sum())
+                if tvalid.any():
+                    tii_cnt["min"] = min(tii_cnt["min"], float(tv[tvalid].min()))
+                    tii_cnt["max"] = max(tii_cnt["max"], float(tv[tvalid].max()))
+                    tii_hist_all += np.histogram(tv[tvalid], TII_EDGES)[0]
+                    tii_hist_ak += np.histogram(tv[tvalid & akm], TII_EDGES)[0]
             print(f"rows {r0}-{r1}: valid {pvalid.mean():.3f}", flush=True)
     cnt.update(min=vmin, max=vmax, upper_bound=bound,
                pisr_valid_frac_of_bbox=cnt["pisr_valid"] / cnt["cells"],
                ak_pisr_valid_frac=cnt["ak_pisr_valid"] / max(cnt["ak_cells"], 1))
     report["completeness_range"] = cnt
+    report["water_mask"] = str(water_path)
     pd.DataFrame({"bin_lo": HIST_EDGES[:-1], "bin_hi": HIST_EDGES[1:], "count_bbox": hist_all,
                   "count_alaska": hist_ak}).to_csv(paths.qc / "pisr_histogram.csv", index=False)
     print("completeness/range:", json.dumps(cnt, indent=1), flush=True)
+    if Tds is not None:
+        report["tii_completeness_range"] = tii_cnt
+        pd.DataFrame({"bin_lo": TII_EDGES[:-1], "bin_hi": TII_EDGES[1:], "count_bbox": tii_hist_all,
+                      "count_alaska": tii_hist_ak}).to_csv(paths.qc / "tii_histogram.csv", index=False)
+        print("tii:", json.dumps(tii_cnt), flush=True)
+    ref_lat = cfg["tii"]["ref_lat_deg"]
 
     # --- 4/5. sampled windows: reproducibility + physics -------------------------------------------
     rng = np.random.default_rng(42)
-    samples = {k: [] for k in ("lat", "slope", "aspect", "pisr", "elev", "x", "y")}
-    repro_max = 0.0
+    samples = {k: [] for k in ("lat", "slope", "aspect", "pisr", "tii", "elev", "x", "y")}
+    repro_max = tii_repro_max = 0.0
     n_done, tries = 0, 0
     w = args.win
     with rasterio.open(pisr_path) as P, rasterio.open(dem_path) as D:
@@ -151,15 +195,25 @@ def main():
             tr = P.window_transform(win)
             slope, aspect, lat, geo = horn_true(dem, tr, P.crs)
             fresh = pisr(dem, tr, P.crs, params, geo=geo)
+            fresh[read_water(Wds, P, win)] = np.nan
             both = np.isfinite(fresh) & np.isfinite(pv)
             assert (np.isfinite(fresh) == np.isfinite(pv)).all(), "NaN pattern differs from fresh computation"
             repro_max = max(repro_max, float(np.abs(fresh[both] - pv[both]).max()) if both.any() else 0.0)
+            if Tds is not None:
+                tw = Tds.read(1, window=win)
+                tfresh = terrain_insolation_index(dem, tr, P.crs, params, ref_lat, geo=geo)
+                tfresh[read_water(Wds, P, win)] = np.nan
+                tb = np.isfinite(tfresh) & np.isfinite(tw)
+                assert (np.isfinite(tfresh) == np.isfinite(tw)).all(), "TII NaN pattern differs from fresh computation"
+                tii_repro_max = max(tii_repro_max, float(np.abs(tfresh[tb] - tw[tb]).max()) if tb.any() else 0.0)
+            else:
+                tw = np.full(pv.shape, np.nan, np.float32)
             m = np.isfinite(pv)
             sub = np.flatnonzero(m.ravel())
             sub = rng.choice(sub, min(sub.size, 8000), replace=False)
             rr, cc = np.unravel_index(sub, m.shape)
             xs, ys = rasterio.transform.xy(tr, rr, cc)
-            for k, v in (("lat", lat), ("slope", slope), ("aspect", aspect), ("pisr", pv),
+            for k, v in (("lat", lat), ("slope", slope), ("aspect", aspect), ("pisr", pv), ("tii", tw),
                          ("elev", dem[1:-1, 1:-1])):
                 samples[k].append(v[rr, cc].astype(np.float32))
             samples["x"].append(np.asarray(xs, np.float32))
@@ -167,7 +221,8 @@ def main():
             n_done += 1
     s = {k: np.concatenate(v) for k, v in samples.items()}
     np.savez_compressed(paths.qc / "qc_samples.npz", **s)
-    report["reproducibility"] = {"windows": n_done, "max_abs_diff_vs_fresh": repro_max}
+    report["reproducibility"] = {"windows": n_done, "max_abs_diff_vs_fresh": repro_max,
+                                 "tii_max_abs_diff_vs_fresh": tii_repro_max}
 
     flat = s["slope"] < 0.5
     ref = reference_flat(s["lat"][flat], params)
@@ -187,6 +242,24 @@ def main():
         "E_W_rel_diff": float(abs(by_asp["E"] - by_asp["W"]) / np.mean([by_asp["E"], by_asp["W"]])),
     }
     print("physics:", json.dumps(report["physics"], indent=1), flush=True)
+    if Tds is not None:
+        t = s["tii"]
+        ok = np.isfinite(t)
+        lat_bands = {"<60N": s["lat"] < 60, "60-66N": (s["lat"] >= 60) & (s["lat"] < 66), ">=66N": s["lat"] >= 66}
+        s_cls = (s["slope"] >= 15) & (s["slope"] < 30)
+        south = ((s["aspect"] - 157.5) % 360) < 45
+        north = ((s["aspect"] - 337.5) % 360) < 45
+        report["tii_physics"] = {
+            "reference_latitude_deg": ref_lat,
+            "flat_mean": float(t[flat & ok].mean()), "flat_max_abs": float(np.abs(t[flat & ok]).max()),
+            "corr_with_latitude": float(np.corrcoef(t[ok], s["lat"][ok])[0, 1]),
+            "pisr_corr_with_latitude": float(np.corrcoef(s["pisr"], s["lat"])[0, 1]),
+            "mean_tii_S_slope15_30_by_lat": {k: float(t[ok & s_cls & south & v].mean()) for k, v in lat_bands.items()},
+            "mean_tii_N_slope15_30_by_lat": {k: float(t[ok & s_cls & north & v].mean()) for k, v in lat_bands.items()},
+            "mean_pisr_S_slope15_30_by_lat": {k: float(s["pisr"][s_cls & south & v].mean()) for k, v in lat_bands.items()},
+            "mean_pisr_N_slope15_30_by_lat": {k: float(s["pisr"][s_cls & north & v].mean()) for k, v in lat_bands.items()},
+        }
+        print("tii physics:", json.dumps(report["tii_physics"], indent=1), flush=True)
 
     # --- 6. band-boundary seams --------------------------------------------------------------------
     band_rows = 1024  # run_pisr default band height
@@ -215,6 +288,13 @@ def main():
         "aspect_ordering": report["physics"]["ordering_S_gt_EW_gt_N"],
         "no_band_seams": report["band_seams"]["ratio_max"] < 1.5,
     }
+    if Tds is not None:
+        checks.update({
+            "tii_nodata_matches_pisr": tii_cnt["nodata_mismatch_vs_pisr"] == 0,
+            "tii_reproducible": tii_repro_max < 1e-4,
+            "tii_flat_zero": abs(report["tii_physics"]["flat_mean"]) < 0.01,
+            "tii_latitude_independent": abs(report["tii_physics"]["corr_with_latitude"]) < 0.1,
+        })
     report["checks"] = checks
     report["all_passed"] = all(checks.values())
     (paths.qc / "qc_report.json").write_text(json.dumps(report, indent=2, default=float))

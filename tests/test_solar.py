@@ -122,3 +122,17 @@ def test_reference_flat_matches_plane():
     for lat in (55.0, 65.0):
         dem, t = plane_patch("EPSG:3338", -150.0, lat, 0.0, 180.0)
         assert reference_flat([lat], FULL)[0] == pytest.approx(centre(pisr(dem, t, "EPSG:3338", FULL)), rel=1e-6)
+
+
+@pytest.mark.parametrize("crs", ["EPSG:3338", "EPSG:3413"])
+def test_tii_is_latitude_independent(crs):
+    """Same slope/aspect -> same TII anywhere; flat -> 0; equals PISR at the reference latitude minus flat there."""
+    from arcticdem_pisr.solar import reference_flat, terrain_insolation_index
+    for slope, aspect in [(0, 180), (30, 180), (30, 0), (20, 90), (25, 225)]:
+        vals = [centre(terrain_insolation_index(*plane_patch(crs, lon, lat, slope, aspect), crs, FULL, 64.0))
+                for lon, lat in [(-150, 55.5), (-150, 64.0), (-157, 71.0), (178, 52.0), (-141, 69.5)]]
+        assert np.ptp(vals) < 1e-3, (slope, aspect, vals)
+        ref = centre(pisr(*plane_patch("EPSG:3338", -150, 64.0, slope, aspect), "EPSG:3338", FULL))
+        assert vals[1] == pytest.approx(ref - reference_flat([64.0], FULL)[0], abs=1e-5)
+        if slope == 0:
+            assert abs(vals[0]) < 1e-5
